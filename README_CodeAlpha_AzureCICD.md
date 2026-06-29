@@ -128,9 +128,9 @@ and reproducibly.
 
 DevOps Intern --- CodeAlpha
 
-LinkedIn: https://linkedin.com/in/YOURPROFILE
+LinkedIn: https://linkedin.com/in/khalidagmohamedaly/
 
-GitHub: https://github.com/YOUR_USERNAME
+GitHub: https://github.com/kmohamed20
 
 ## License
 
