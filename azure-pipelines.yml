@@ -1,0 +1,121 @@
+# CodeAlpha DevOps - Tâche 1 : CI/CD Pipeline using Azure
+#
+# Pipeline en 3 étapes :
+#   1. Build  : build de l'image Docker + tests
+#   2. Push   : publication de l'image sur Azure Container Registry
+#   3. Deploy : déploiement automatique sur Azure App Service (Web App for Containers)
+#
+# Prérequis dans Azure DevOps (à faire une seule fois) :
+#   - Créer une "Service Connection" de type "Docker Registry" pointant vers ton ACR
+#     (Project Settings > Service connections > New > Docker Registry > Azure Container Registry)
+#   - Créer une "Service Connection" de type "Azure Resource Manager" pour le déploiement App Service
+#   - Renseigner les variables ci-dessous (acrServiceConnection, azureSubscription, etc.)
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+variables:
+  # --- À adapter à ton environnement Azure ---
+  acrServiceConnection: 'codealpha-acr-connection'      # nom de la Service Connection Docker Registry
+  azureSubscription: 'codealpha-azure-connection'       # nom de la Service Connection ARM
+  acrName: 'codealphaacr'                                # nom (sans .azurecr.io) de ton registre ACR
+  imageRepository: 'codealpha-webserver'
+  containerRegistry: '$(acrName).azurecr.io'
+  dockerfilePath: '$(Build.SourcesDirectory)/Dockerfile'
+  tag: '$(Build.BuildId)'
+  webAppName: 'codealpha-webapp'                         # nom de ton App Service
+  resourceGroup: 'rg-codealpha-devops'
+  vmImageName: 'ubuntu-latest'
+
+stages:
+
+  # ---------------------------------------------------------------------------
+  - stage: Build
+    displayName: 'Build & Test'
+    jobs:
+      - job: BuildAndTest
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: NodeTool@0
+            inputs:
+              versionSpec: '20.x'
+            displayName: 'Installer Node.js 20'
+
+          - script: |
+              cd app
+              npm install
+              npm test
+            displayName: 'Installer les dépendances et lancer les tests'
+
+          - task: Docker@2
+            displayName: 'Build de l-image Docker'
+            inputs:
+              command: build
+              repository: $(imageRepository)
+              dockerfile: $(dockerfilePath)
+              containerRegistry: $(acrServiceConnection)
+              tags: |
+                $(tag)
+                latest
+
+  # ---------------------------------------------------------------------------
+  - stage: Push
+    displayName: 'Push vers Azure Container Registry'
+    dependsOn: Build
+    condition: succeeded()
+    jobs:
+      - job: PushImage
+        pool:
+          vmImage: $(vmImageName)
+        steps:
+          - task: Docker@2
+            displayName: 'Build + Push vers ACR'
+            inputs:
+              command: buildAndPush
+              repository: $(imageRepository)
+              dockerfile: $(dockerfilePath)
+              containerRegistry: $(acrServiceConnection)
+              tags: |
+                $(tag)
+                latest
+
+  # ---------------------------------------------------------------------------
+  - stage: Deploy
+    displayName: 'Déploiement sur Azure App Service'
+    dependsOn: Push
+    condition: succeeded()
+    jobs:
+      - deployment: DeployWebApp
+        displayName: 'Deploy to App Service'
+        pool:
+          vmImage: $(vmImageName)
+        environment: 'production'
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - task: AzureWebAppContainer@1
+                  displayName: 'Déployer le conteneur sur App Service'
+                  inputs:
+                    azureSubscription: $(azureSubscription)
+                    appName: $(webAppName)
+                    containers: '$(containerRegistry)/$(imageRepository):$(tag)'
+
+                - script: |
+                    echo "Déploiement terminé. Vérification du health check..."
+                    sleep 20
+                    status=$(curl -s -o /dev/null -w "%{http_code}" https://$(webAppName).azurewebsites.net/health)
+                    echo "Code retourné par /health : $status"
+                    if [ "$status" -ne 200 ]; then
+                      echo "##vso[task.logissue type=error]Le déploiement semble avoir échoué (health check non-200)."
+                      exit 1
+                    fi
+                  displayName: 'Vérifier le déploiement (smoke test)'
